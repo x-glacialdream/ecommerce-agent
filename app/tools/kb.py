@@ -1,6 +1,8 @@
 from typing import Any, Dict
+
 from app.tools.base import BaseTool
 from app.services.retriever import SimpleRetriever
+from app.services.llamaindex_retriever import LlamaIndexRetriever
 
 
 class QueryKBTool(BaseTool):
@@ -44,7 +46,8 @@ class QueryKBTool(BaseTool):
     ]
 
     def __init__(self) -> None:
-        self.retriever = SimpleRetriever()
+        self.llama_retriever = LlamaIndexRetriever()
+        self.legacy_retriever = SimpleRetriever()
 
     def run(self, **kwargs) -> Dict[str, Any]:
         query = str(kwargs.get("query", "")).strip()
@@ -63,19 +66,48 @@ class QueryKBTool(BaseTool):
 
         top_k = max(1, min(top_k, 5))
 
-        retrieved = self.retriever.search(query=query, top_k=top_k)
+        # 先走 LlamaIndex embedding RAG
+        try:
+            retrieved = self.llama_retriever.search(query=query, top_k=top_k)
 
-        if not retrieved["success"]:
-            return self.fail(
-                error=retrieved["error"],
-                suggestion="Try using a more specific policy-related query"
+            if not retrieved["success"]:
+                raise RuntimeError(retrieved.get("error", "Unknown LlamaIndex retrieval error"))
+
+            return self.ok(
+                data={
+                    "query": retrieved["query"],
+                    "query_tokens": retrieved["query_tokens"],
+                    "top_k": retrieved["top_k"],
+                    "results": retrieved["results"]
+                }
             )
 
-        return self.ok(
-            data={
-                "query": retrieved["query"],
-                "query_tokens": retrieved["query_tokens"],
-                "top_k": retrieved["top_k"],
-                "results": retrieved["results"]
-            }
-        )
+        # 如果 LlamaIndex 失败，再降级到旧版关键词检索
+        except Exception as llama_error:
+            try:
+                retrieved = self.legacy_retriever.search(query=query, top_k=top_k)
+
+                if not retrieved["success"]:
+                    return self.fail(
+                        error=retrieved["error"],
+                        suggestion="Try using a more specific policy-related query"
+                    )
+
+                result = self.ok(
+                    data={
+                        "query": retrieved["query"],
+                        "query_tokens": retrieved["query_tokens"],
+                        "top_k": retrieved["top_k"],
+                        "results": retrieved["results"]
+                    }
+                )
+                result["suggestion"] = (
+                    f"LlamaIndex retrieval failed, fallback to legacy retriever: {str(llama_error)}"
+                )
+                return result
+
+            except Exception as legacy_error:
+                return self.fail(
+                    error=f"LlamaIndex failed: {str(llama_error)} | Legacy retriever failed: {str(legacy_error)}",
+                    suggestion="Check embedding dependencies, knowledge base format, or retriever logic"
+                )
