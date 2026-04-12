@@ -255,33 +255,23 @@ class LLMPlanner:
 
     def __init__(self) -> None:
         self.fallback = MockPlanner()
-        self.enabled = HAS_GEMINI and bool(os.getenv("GEMINI_API_KEY"))
+
+        self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.enabled = HAS_GEMINI and bool(self.api_key)
+
         print("GEMINI_ENABLED =", self.enabled)
         print("GEMINI_MODEL =", self.model)
-        print("GEMINI_API_KEY_EXISTS =", bool(os.getenv("GEMINI_API_KEY")))
+        print("GEMINI_API_KEY_EXISTS =", bool(self.api_key))
 
-        class LLMPlanner:
-            """
-            Gemini-powered planner.
-            Fallback to MockPlanner when API is unavailable or output is invalid.
-            """
-
-            def __init__(self) -> None:
-                self.fallback = MockPlanner()
-
-                self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-                self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-                self.enabled = HAS_GEMINI and bool(self.api_key)
-
-                print("GEMINI_ENABLED =", self.enabled)
-                print("GEMINI_MODEL =", self.model)
-                print("GEMINI_API_KEY_EXISTS =", bool(self.api_key))
-
-                if self.enabled:
-                    self.client = genai.Client(api_key=self.api_key)
-                else:
-                    self.client = None
+        self.client = None
+        if self.enabled:
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+            except Exception as e:
+                print("GEMINI_CLIENT_INIT_FAILED =", e)
+                self.client = None
+                self.enabled = False
 
     def _build_context_text(
         self,
@@ -382,11 +372,13 @@ thought, decision_type, action, action_input, reason
         last_observation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not self.enabled or not self.client:
+            print("PLANNER_PATH = MockPlanner")
             return self.fallback.decide(user_input, steps, context_payload, last_observation)
 
         prompt = self._build_prompt(user_input, steps, context_payload, last_observation)
 
         try:
+            print("PLANNER_PATH = Gemini")
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=prompt,
@@ -397,5 +389,6 @@ thought, decision_type, action, action_input, reason
             )
             parsed = json.loads(response.text)
             return self._normalize_decision(parsed)
-        except Exception:
+        except Exception as e:
+            print("PLANNER_PATH = Gemini -> Fallback due to exception:", e)
             return self.fallback.decide(user_input, steps, context_payload, last_observation)
