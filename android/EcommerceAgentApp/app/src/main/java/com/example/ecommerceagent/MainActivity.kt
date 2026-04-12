@@ -19,6 +19,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.ecommerceagent.network.RetrofitClient
 import com.example.ecommerceagent.network.StepTrace
@@ -70,7 +71,9 @@ fun EcommerceAgentApp() {
                     value = userInput,
                     onValueChange = { userInput = it },
                     label = { Text("请输入任务") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("task_input")
                 )
             }
 
@@ -96,7 +99,9 @@ fun EcommerceAgentApp() {
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("run_button")
                 ) {
                     Text("调用云端 Agent")
                 }
@@ -121,7 +126,9 @@ fun EcommerceAgentApp() {
 
             if (finalAnswer.isNotBlank()) {
                 item {
-                    Card {
+                    Card(
+                        modifier = Modifier.testTag("final_answer_card")
+                    ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
                                 text = "最终回答",

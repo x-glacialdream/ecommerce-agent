@@ -2,11 +2,12 @@ from fastapi import FastAPI
 from app.schemas import TaskRequest, TaskResponse
 from app.agent.core import EcommerceAgent
 from app.services.registry import ToolRegistry
+from app.services.metrics import metrics_collector
 
 app = FastAPI(
     title="Minimal E-commerce Agent",
     version="0.1.0",
-    description="A minimal multi-tool e-commerce agent with error handling, max-step control, loop detection, lightweight retrieval, and structured logging."
+    description="A minimal multi-tool e-commerce agent with error handling, max-step control, loop detection, lightweight retrieval, structured logging, and simple metrics."
 )
 
 agent = EcommerceAgent()
@@ -20,7 +21,8 @@ def root():
         "available_endpoints": [
             "/run_task",
             "/health",
-            "/tools"
+            "/tools",
+            "/metrics"
         ]
     }
 
@@ -40,6 +42,11 @@ def list_tools():
         "count": len(registry.list_tools()),
         "tools": registry.list_tools()
     }
+
+
+@app.get("/metrics")
+def metrics():
+    return metrics_collector.snapshot()
 
 
 @app.post("/run_task", response_model=TaskResponse)
