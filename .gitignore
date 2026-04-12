@@ -4,3 +4,8 @@ __pycache__/
 **/__pycache__/
 *.pyc
 .env
+
+android/EcommerceAgentApp/.gradle/
+android/EcommerceAgentApp/build/
+android/EcommerceAgentApp/app/build/
+android/EcommerceAgentApp/local.properties
