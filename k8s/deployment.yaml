@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecommerce-agent
+  labels:
+    app: ecommerce-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ecommerce-agent
+  template:
+    metadata:
+      labels:
+        app: ecommerce-agent
+    spec:
+      containers:
+        - name: ecommerce-agent
+          image: ecommerce-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: GEMINI_API_KEY
+              value: "AIzaSyC4nXTlTT32cFM62yXpg1GMP1eSxP0xPMI"
+            - name: GEMINI_MODEL
+              value: "gemini-2.5-flash"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
