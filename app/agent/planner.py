@@ -384,7 +384,7 @@ thought, decision_type, action, action_input, reason
                 contents=prompt,
                 config={
                     "response_mime_type": "application/json",
-                    "response_json_schema": PlannerDecision.model_json_schema(),
+                    "response_schema": PlannerDecision.model_json_schema(),
                 },
             )
             parsed = json.loads(response.text)
