@@ -1,228 +1,483 @@
-# Minimal E-commerce Agent
+# Business Ops AI Agent
 
-一个基于 **FastAPI + Gemini + ReAct** 的最小电商 Agent 项目。  
-系统支持多工具协同、轻量检索增强、上下文压缩、结构化日志，以及基础的安全控制与服务化部署。
-
-当前已实现：
-
-- FastAPI 服务化接口
-- Gemini 驱动的多步决策
-- ReAct 风格任务执行链路
-- 三个工具协同：
-  - 订单修改 `modify_order`
-  - 物流查询 `query_logistics`
-  - 规则知识检索 `query_kb`
-- Tool Schema 标准化
-- 轻量 RAG 检索层（关键词召回 + top-k + score + evidence）
-- 上下文压缩（最近步骤保留细节，历史步骤做摘要）
-- Max-Step 与循环检测
-- request_id / trace_id
-- 结构化 JSON 日志
-- `/health` 与 `/tools` 对外接口
-- Docker 本地真跑
-- AWS EC2 云上真部署
-- GitHub Actions 自动部署
-- Android 最小客户端调用云端接口
-- Kubernetes 基础 yaml 配置
+该项目最初以电商 Agent 原型启动，后续逐步抽象并扩展为面向企业内部业务场景的多工具 AI Agent 平台，当前主要覆盖销售分析、异常预警、报销审核与内部知识检索等场景。
 
 ---
 
 ## 1. 项目定位
 
-这个项目的目标不是做一个简单聊天机器人，而是实现一个具备 **感知 - 决策 - 行动** 闭环能力的最小电商 Agent。
+本项目的目标不是做一个“会聊天”的通用助手，而是做一个可落地的 **企业内部数智化 AI Agent**。
 
-它可以处理类似这样的复合任务：
+系统聚焦以下典型业务问题：
 
-> 帮我查一下订单 1001 的物流，并判断现在还能不能改地址
+- 帮我分析最近 30 天各区域销量表现
+- 帮我看看最近哪些区域-产品线组合出现异常波动
+- 帮我检查这批报销记录里有哪些异常项
+- 帮我看看最近哪些异常，再结合制度给出处理建议
 
-系统会自动完成：
+与普通问答不同，这类任务通常需要：
 
-1. 调用物流工具查询订单状态
-2. 调用知识库检索相关规则
-3. 整合多步结果，生成最终回答
+1. 先识别任务类型
+2. 选择合适工具
+3. 调用数据分析 / 规则审核 / 知识检索能力
+4. 基于 observation 继续下一步
+5. 最终整合为对业务可读的结论
+
+因此项目采用 **ReAct 风格的多步执行链路**，而不是单轮直接生成答案。
 
 ---
 
-## 2. 技术栈
+## 2. 项目当前能力
+
+当前系统已经具备以下能力：
+
+- FastAPI 服务化接口
+- 多工具 Agent 主循环
+- 规则 Planner + LLM Planner 双路径
+- 销售分析工具 `query_sales_insight`
+- 业务异常检测工具 `detect_business_anomaly`
+- 报销审核工具 `audit_expense`
+- 内部知识检索工具 `query_internal_kb`
+- 结构化 Tool Schema
+- 更正式的 RAG embedding 检索链路
+- 关键词检索降级回退机制
+- 上下文压缩
+- Max-Step 与循环检测
+- request_id / trace_id
+- 结构化 JSON 日志
+- 基础 metrics 统计与访问结果统计
+- Docker 容器化
+- AWS EC2 部署
+- GitHub Actions 自动部署
+- Android 最小客户端接入
+- Kubernetes 基础配置
+
+---
+
+## 3. 典型任务示例
+
+### 示例 1：销售分析
+
+> 帮我分析最近30天各区域销量表现
+
+系统会：
+
+1. 识别为销售分析任务
+2. 调用 `query_sales_insight`
+3. 返回各区域核心表现、top groups 与摘要
+
+---
+
+### 示例 2：异常预警
+
+> 帮我看看最近哪些销量异常下滑
+
+系统会：
+
+1. 识别为异常检测任务
+2. 调用 `detect_business_anomaly`
+3. 返回异常对象、偏离比例、严重程度和建议动作
+
+---
+
+### 示例 3：报销审核
+
+> 帮我检查这批报销单有哪些异常
+
+系统会：
+
+1. 识别为财务审核任务
+2. 调用 `audit_expense`
+3. 标记超限、重复发票、日期异常、缺失字段等问题
+
+---
+
+### 示例 4：复合任务
+
+> 帮我看看最近哪些异常，再结合制度给出处理建议
+
+系统会：
+
+1. 先调用 `detect_business_anomaly`
+2. 再调用 `query_internal_kb`
+3. 将异常结果与制度依据合并为最终回答
+
+---
+
+## 4. 技术栈
+
+### 后端
 
 - Python
 - FastAPI
 - Uvicorn
-- Gemini API
 - Pydantic
-- 本地轻量检索（JSON knowledge base + keyword retrieval）
+- Pandas
+
+### Agent / AI
+
+- ReAct-style multi-step orchestration
+- Gemini API（可选）
+- MockPlanner（降级路径）
+- LlamaIndex
+- HuggingFace Embedding
+- 关键词检索 + embedding 检索双路径
+
+### 工程化
+
 - Docker
 - AWS EC2
 - GitHub Actions
+- Kubernetes 基础 YAML
+
+### 客户端
+
 - Kotlin
 - Jetpack Compose
 - Retrofit
 
 ---
 
-## 3. 项目结构
+## 5. 项目结构
 
 ```text
 ecommerce-agent/
+├─ .github/
+│  └─ workflows/
+│     └─ deploy.yml
+├─ android/
+│  └─ EcommerceAgentApp/
 ├─ app/
 │  ├─ agent/
 │  │  ├─ core.py
 │  │  ├─ planner.py
 │  │  └─ safety.py
 │  ├─ data/
-│  │  └─ knowledge_base.json
+│  │  ├─ knowledge_base.json
+│  │  ├─ sales_data.csv
+│  │  └─ expense_data.csv
 │  ├─ services/
+│  │  ├─ llamaindex_retriever.py
 │  │  ├─ memory.py
+│  │  ├─ metrics.py
 │  │  ├─ registry.py
 │  │  └─ retriever.py
 │  ├─ tools/
+│  │  ├─ anomaly.py
 │  │  ├─ base.py
-│  │  ├─ logistics.py
-│  │  ├─ order.py
-│  │  └─ kb.py
+│  │  ├─ expense_audit.py
+│  │  ├─ kb.py
+│  │  └─ sales_insight.py
 │  ├─ utils/
 │  │  └─ logger.py
 │  ├─ main.py
 │  └─ schemas.py
-├─ android/
-│  └─ EcommerceAgentApp/
+├─ scripts/
+│  ├─ generate_expense_data.py
+│  └─ generate_sales_data.py
 ├─ k8s/
 │  ├─ deployment.yaml
 │  └─ service.yaml
-├─ .github/
-│  └─ workflows/
-│     └─ deploy.yml
 ├─ .dockerignore
+├─ .gitignore
 ├─ Dockerfile
-├─ requirements.txt
-└─ README.md
-````
-
-**目录职责说明：**
-
-* **app/agent/**：Agent 主循环、Planner、安全控制
-* **app/tools/**：工具定义与具体实现
-* **app/services/**：检索、上下文压缩、工具注册
-* **app/data/**：知识库数据
-* **app/utils/**：日志等通用能力
-* **app/main.py**：FastAPI 服务入口
-* **android/EcommerceAgentApp/**：Android 最小客户端
-* **k8s/**：Kubernetes 基础部署配置
-* **.github/workflows/**：自动化部署工作流
+├─ README.md
+└─ requirements.txt
+```
 
 ---
 
-## 4. 核心能力说明
+## 6. 核心设计说明
 
-### 4.1 ReAct 风格多步执行
+### 6.1 Agent 主循环
 
-系统不是单轮问答，而是按多步方式执行：
+核心执行逻辑位于 Agent 主循环中。系统不会在收到请求后直接输出答案，而是先把：
 
-1. planner 决策下一步 action
+- 用户输入
+
+- 历史步骤
+
+- 压缩后的上下文
+
+- 最近一次 observation
+
+一起交给 planner 决策下一步 action。
+
+每次决策后：
+
+1. 通过 ToolRegistry 找到目标工具
+
 2. 调用工具执行
-3. 将 observation 返回给 planner
-4. planner 再决定下一步
-5. 直到 finish
 
-### 4.2 Tool Schema 标准化
+3. 将 observation 记录到 step trace
 
-每个工具都暴露统一定义：
+4. 再交回 planner 做下一步决策
 
-* `name`
-* `description`
-* `input_schema`
-* `output_schema`
-* `examples`
+5. 直到 `finish`
+
+---
+
+### 6.2 Tool Schema 标准化
+
+每个工具都遵循统一结构：
+
+- `name`
+
+- `description`
+
+- `input_schema`
+
+- `output_schema`
+
+- `examples`
+
+统一返回格式：
+
+```json
+{
+  "success": true,
+  "data": {},
+  "error": null,
+  "suggestion": null,
+  "tool_name": "query_sales_insight",
+  "summary": "..."
+}
+```
 
 这使得：
 
-* LLM 更稳定地调用工具
-* `/tools` 接口可直接暴露工具能力
-* 后续 Android / Web 前端可动态读取能力注册表
+- Planner 更容易稳定调用工具
 
-### 4.3 轻量 RAG 检索层
+- `/tools` 接口可以自动暴露工具定义
 
-知识库不再是简单 dict 匹配，而是升级为：
-
-* 独立 `knowledge_base.json`
-* 检索服务 `retriever.py`
-* 关键词召回
-* top-k 返回
-* score 打分
-* evidence 证据片段
-
-这使系统具备了最小可用的 RAG 形态，后续可以进一步升级到 embedding 和向量检索。
-
-### 4.4 上下文压缩
-
-为了避免多步任务中 prompt 长度不断膨胀，系统加入了上下文压缩：
-
-* 最近 2~3 步保留完整细节
-* 更早步骤转为摘要
-* planner 使用压缩后的上下文做决策
-
-### 4.5 安全控制
-
-系统加入了基础安全边界：
-
-* Max-Step 限制
-* 循环检测
-* 工具异常捕获
-* 错误 observation 回传 planner
-
-### 4.6 结构化日志
-
-系统将业务 trace 和工程日志分开：
-
-* 业务层：`steps`
-* 工程层：JSON 结构化日志
-
-日志中包含：
-
-* `request_id`
-* `trace_id`
-* `step`
-* `action`
-* `action_input`
-* `observation_success`
-* `latency_ms`
-* `stop_reason`
-
-便于后续问题排查、性能分析、云端部署观测以及 CI/CD smoke test 调试。
+- 新工具后续更容易扩展
 
 ---
 
-## 5. 环境要求
+### 6.3 销售分析工具
+
+`sales_insight.py` 面向销售与经营分析场景，支持：
+
+- 按区域分析
+
+- 按产品线分析
+
+- 时间范围分析
+
+- 结构化 top groups 输出
+
+- 自动摘要生成
+
+支持字段包括：
+
+- `sales_amount`
+
+- `quantity`
+
+- `region`
+
+- `product_line`
+
+---
+
+### 6.4 异常检测工具
+
+`anomaly.py` 面向经营异常识别，支持：
+
+- `region`
+
+- `product_line`
+
+- `region_product_line`
+
+三个粒度的异常分析。
+
+为了避免异常被粗粒度聚合摊平，工具支持 **区域-产品线组合粒度** 检测，并使用：
+
+- recent daily average
+
+- baseline daily average
+
+- deviation ratio
+
+- severity
+
+- suggested action
+
+输出结构化异常结果。
+
+---
+
+### 6.5 报销审核工具
+
+`expense_audit.py` 面向内部财务审核场景，支持识别：
+
+- 金额超限
+
+- 重复发票号
+
+- 疑似重复报销
+
+- 日期异常
+
+- 缺失字段
+
+并输出：
+
+- `flagged_items`
+
+- `issue_list`
+
+- `risk_level`
+
+- `summary`
+
+该模块体现了“规则优先，模型辅助”的设计思路。
+
+---
+
+### 6.6 更正式的 RAG embedding 检索
+
+知识检索部分采用两层设计：
+
+#### 第一层：LlamaIndex + Embedding
+
+- 基于 `knowledge_base.json` 构建向量索引
+
+- 使用 HuggingFace Embedding
+
+- 支持持久化索引
+
+- 支持索引自动重建
+
+- 支持按文档 ID 去重，避免重复 chunk 返回
+
+#### 第二层：SimpleRetriever 关键词检索降级
+
+- 当 embedding 检索不可用或失败时
+
+- 自动回退到关键词检索
+
+- 仍能返回 top-k、score、evidence
+
+这使系统具备了更正式的 RAG 形态，而不只是简单 FAQ 匹配。
+
+---
+
+### 6.7 上下文压缩
+
+为了控制多步任务中的上下文膨胀，系统会：
+
+- 保留最近几步的完整细节
+
+- 将更早步骤压缩成摘要
+
+- 将压缩结果传入 planner
+
+这能在多步任务中保持上下文可用性，同时控制 prompt 规模。
+
+---
+
+### 6.8 安全边界
+
+系统加入了基础安全控制：
+
+- Max-Step 限制
+
+- 循环检测
+
+- 工具异常捕获
+
+- observation 回传
+
+- Planner 决策闭环控制
+
+避免 Agent 在复杂任务中无限循环。
+
+---
+
+## 7. 简单监控 / 访问日志统计
+
+项目目前实现了轻量级可观测性能力，主要包括两部分：
+
+### 7.1 结构化访问日志
+
+系统会输出 JSON 结构化日志，包含：
+
+- `request_id`
+
+- `trace_id`
+
+- `step`
+
+- `action`
+
+- `action_input`
+
+- `observation_success`
+
+- `latency_ms`
+
+- `stop_reason`
+
+这使得每次请求、每一步工具调用都可追踪。
+
+---
+
+### 7.2 基础 metrics 统计
+
+系统提供 `/metrics` 接口，用于暴露基础请求统计信息，包括：
+
+- 请求总数
+
+- 成功 / 失败请求数
+
+- 工具调用次数
+
+- 请求耗时分布
+
+- action 计数
+
+虽然目前还不是 Prometheus / Grafana 级别的正式监控体系，但已经具备了：
+
+- 访问日志统计
+
+- 工具级调用统计
+
+- 请求级耗时观测
+
+能够支撑本地调试、接口验收和最小部署观测。
+
+---
+
+## 8. 环境要求
 
 建议环境：
 
-* Python 3.10+
-* Windows / macOS / Linux
-* Docker Desktop（本地容器化时）
-* Android Studio（Android 客户端开发时）
-* 可选：Gemini API Key
+- Python 3.10+
+
+- Windows / macOS / Linux
+
+- Docker Desktop（容器化时）
+
+- Android Studio（客户端开发时）
+
+- 可选：Gemini API Key
 
 ---
 
-## 6. 环境变量
-
-使用 Gemini 时需要配置：
+## 9. 环境变量
 
 ```bash
 GEMINI_API_KEY=your_gemini_api_key
-```
-
-可选模型配置：
-
-```bash
 GEMINI_MODEL=gemini-2.5-flash
 ```
 
-如果没有配置 Gemini API，系统会自动回退到内置 MockPlanner。
+如果未配置 Gemini，系统会自动回退到内置 `MockPlanner`。
 
 ---
 
-## 7. 安装依赖
+## 10. 安装依赖
 
 ```bash
 pip install -r requirements.txt
@@ -230,471 +485,239 @@ pip install -r requirements.txt
 
 ---
 
-## 8. 本地启动
+## 11. 生成模拟数据
 
-在项目根目录运行：
+项目提供了两个数据生成脚本：
+
+```bash
+python scripts/generate_sales_data.py
+python scripts/generate_expense_data.py
+```
+
+会生成：
+
+- `app/data/sales_data.csv`
+
+- `app/data/expense_data.csv`
+
+用于本地演示销售分析、异常检测和报销审核。
+
+---
+
+## 12. 本地启动
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-启动后访问：
+启动后可访问：
 
-* 根路径：`http://127.0.0.1:8000/`
-* Swagger 文档：`http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/`
+
+- `http://127.0.0.1:8000/docs`
+
+- `http://127.0.0.1:8000/health`
+
+- `http://127.0.0.1:8000/tools`
+
+- `http://127.0.0.1:8000/metrics`
 
 ---
 
-## 9. API 接口
+## 13. API 说明
 
-### 9.1 GET `/`
+### GET `/`
 
 服务首页。
 
-**示例响应：**
-
-```json
-{
-  "message": "Minimal E-commerce Agent is running.",
-  "available_endpoints": [
-    "/run_task",
-    "/health",
-    "/tools"
-  ]
-}
-```
-
-### 9.2 GET `/health`
+### GET `/health`
 
 健康检查接口。
-用于 Docker 健康检查、EC2 部署验证、GitHub Actions smoke test、Kubernetes readiness / liveness probe。
 
-**示例响应：**
+### GET `/tools`
 
-```json
-{
-  "status": "ok",
-  "service": "minimal-ecommerce-agent",
-  "version": "0.1.0"
-}
-```
+返回当前已注册工具及其 schema。
 
-### 9.3 GET `/tools`
+### GET `/metrics`
 
-返回当前系统已注册工具及其 schema。
+返回基础监控统计信息。
 
-**示例响应：**
+### POST `/run_task`
+
+执行业务任务。
+
+示例请求：
 
 ```json
 {
-  "count": 3,
-  "tools": [
-    {
-      "name": "query_logistics",
-      "description": "Query logistics status and tracking number by order_id.",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "order_id": {
-            "type": "string",
-            "description": "Order ID, such as 1001"
-          }
-        },
-        "required": ["order_id"]
-      },
-      "output_schema": {
-        "type": "object",
-        "properties": {
-          "order_id": { "type": "string" },
-          "status": { "type": "string" },
-          "tracking_no": { "type": "string" }
-        }
-      },
-      "examples": [
-        {
-          "input": { "order_id": "1001" },
-          "description": "Query current logistics info of an order"
-        }
-      ]
-    }
-  ]
-}
-```
-
-### 9.4 POST `/run_task`
-
-执行用户任务。
-
-**请求体：**
-
-```json
-{
-  "user_input": "帮我查一下订单1001的物流，并判断现在还能不能改地址"
-}
-```
-
-**示例响应：**
-
-```json
-{
-  "status": "success",
-  "final_answer": "订单 1001 的物流状态是：运输中，运单号：SF123456。另外，根据知识库规则：通常订单发货后不支持直接修改收货地址。若物流尚未完成派送，可尝试联系物流公司或客服协助处理，但不能保证修改成功。",
-  "steps": [
-    {
-      "step": 1,
-      "thought": "[call_tool] 这是一个复合任务，先查物流状态。",
-      "action": "query_logistics",
-      "action_input": {
-        "order_id": "1001"
-      },
-      "observation": {
-        "success": true,
-        "data": {
-          "order_id": "1001",
-          "status": "运输中",
-          "tracking_no": "SF123456"
-        },
-        "error": null,
-        "suggestion": null,
-        "tool_name": "query_logistics"
-      }
-    },
-    {
-      "step": 2,
-      "thought": "[switch_tool] 物流信息已拿到，继续查询发货后修改地址规则。",
-      "action": "query_kb",
-      "action_input": {
-        "query": "发货后修改地址",
-        "top_k": 3
-      },
-      "observation": {
-        "success": true,
-        "data": {
-          "query": "发货后修改地址",
-          "query_tokens": [
-            "发货后修改地址",
-            "发货",
-            "地址",
-            "修改"
-          ],
-          "top_k": 3,
-          "results": []
-        },
-        "error": null,
-        "suggestion": null,
-        "tool_name": "query_kb"
-      }
-    }
-  ],
-  "stop_reason": "planner_finish:finish"
+  "user_input": "帮我看看最近哪些异常，再结合制度给出处理建议"
 }
 ```
 
 ---
 
-## 10. 典型任务示例
+## 14. 典型测试输入
 
-**示例 1：查询物流**
+### 销售分析
 
 ```json
 {
-  "user_input": "帮我查一下订单1001的物流"
+  "user_input": "帮我分析最近30天各区域销量表现"
 }
 ```
 
-**示例 2：修改未发货订单地址**
+### 异常检测
 
 ```json
 {
-  "user_input": "帮我把订单1003的地址改成上海市闵行区XX路88号"
+  "user_input": "帮我看看最近哪些异常"
 }
 ```
 
-**示例 3：查询退款规则**
+### 报销审核
 
 ```json
 {
-  "user_input": "退款规则是什么"
+  "user_input": "帮我检查这批报销单有哪些异常"
 }
 ```
 
-**示例 4：复合任务**
+### 知识检索
 
 ```json
 {
-  "user_input": "帮我查一下订单1001的物流，并判断现在还能不能改地址"
+  "user_input": "差旅报销超过标准怎么处理"
+}
+```
+
+### 复合任务
+
+```json
+{
+  "user_input": "帮我看看最近哪些异常，再结合制度给出处理建议"
 }
 ```
 
 ---
 
-## 11. Docker 启动
+## 15. Docker 启动
 
-**构建镜像：**
+构建镜像：
 
 ```bash
-docker build -t ecommerce-agent:latest .
+docker build -t business-ops-ai-agent:latest .
 ```
 
-**运行容器：**
+运行容器：
 
 ```bash
-docker run -d -p 8000:8000 --name ecommerce-agent \
+docker run -d -p 8000:8000 --name business-ops-ai-agent \
   -e GEMINI_API_KEY=your_gemini_api_key \
   -e GEMINI_MODEL=gemini-2.5-flash \
-  ecommerce-agent:latest
-```
-
-启动后访问：
-
-* `http://127.0.0.1:8000/`
-* `http://127.0.0.1:8000/docs`
-* `http://127.0.0.1:8000/health`
-
----
-
-## 12. 日志说明
-
-服务运行时会输出 JSON 结构化日志，例如：
-
-```json
-{
-  "timestamp": "2026-04-11T10:14:18.848727Z",
-  "level": "INFO",
-  "logger": "ecommerce_agent",
-  "message": "tool_execution_completed",
-  "request_id": "req_6917a10e58e9",
-  "trace_id": "trace_s2_63637e67",
-  "step": 2,
-  "action": "query_kb",
-  "action_input": {
-    "query": "发货后修改地址",
-    "top_k": 3
-  },
-  "observation_success": true,
-  "error": null,
-  "latency_ms": 1.78
-}
+  business-ops-ai-agent:latest
 ```
 
 ---
 
-## 13. 当前已完成的工程能力
+## 16. AWS EC2 / GitHub Actions / Kubernetes
 
-* FastAPI 服务化
-* 多工具 ReAct 执行链
-* Tool Schema 标准化
-* 轻量 RAG 检索层
-* 上下文压缩
-* Max-Step 与循环检测
-* 结构化日志
-* `/health`
-* `/tools`
-* Docker 本地真跑
-* EC2 云上真部署
-* GitHub Actions 自动部署
-* Android 最小客户端
-* Kubernetes 基础 yaml 配置
+### EC2
 
----
+项目已完成云端部署验证，可在 EC2 上通过 Docker 运行。
 
-## 14. 后续扩展方向
+### GitHub Actions
 
-### 14.1 云部署
+项目已补充自动化部署流程，可在代码提交后执行构建与发布。
 
-* 部署到 AWS EC2
-* 基于 Docker 运行服务
-* 使用安全组开放 API 端口
+### Kubernetes
 
-### 14.2 CI/CD
-
-* GitHub Actions 自动测试
-* 自动构建 Docker 镜像
-* 自动部署到 EC2
-
-### 14.3 Android 客户端
-
-* Kotlin + Jetpack Compose
-* 通过 HTTP 调用 `/run_task`
-* 展示 final answer 和 steps trace
-
-### 14.4 Kubernetes
-
-* 编写 `deployment.yaml` / `service.yaml`
-* 基于 `/health` 做 readiness / liveness probe
-* 后续扩展副本数与滚动更新
-
-### 14.5 更正式的 RAG
-
-* 引入 embedding
-* 向量检索
-* rerank
-* 外部知识库管理
-
-### 14.6 可观测性
-
-* 请求级链路追踪
-* 访问统计
-* 指标上报
-* 监控面板
-
----
-
-## 15. Android 最小客户端说明
-
-项目已补充一个最小 Android 客户端，用于调用云上部署的 Agent 服务。
-
-### 技术栈
-
-* Kotlin
-* Jetpack Compose
-* Retrofit
-* Gson Converter
-
-### 当前能力
-
-Android 客户端当前实现了最小闭环：
-
-* 输入用户任务
-* 调用云端 `/run_task`
-* 展示 `final_answer`
-* 展示执行步骤 `steps`
-
-### 调用链路
-
-当前 Android 端通过公网地址直接访问部署在 EC2 上的服务，例如：
-
-```text
-http://35.170.81.92:8000/run_task
-```
-
-完整链路为：
-
-```text
-Android App -> EC2 Public IP -> Docker Container -> FastAPI Agent
-```
-
-### 说明
-
-当前 Android 端更偏向演示版 / 调试版界面，目的是验证：
-
-* 移动端可以正常调用 Agent API
-* 服务端返回结果可以在客户端展示
-* Agent 的执行步骤不是黑盒
-
-后续如果继续完善，可以扩展为：
-
-* 更友好的步骤展示
-* 历史任务记录
-* 错误提示优化
-* 更正式的 UI 风格
-* 接入 Android 无障碍执行层或 UI 自动化能力
-
----
-
-## 16. Kubernetes 配置说明
-
-项目已补充最小可讲版 Kubernetes 配置，位于：
+项目包含基础配置：
 
 ```text
 k8s/deployment.yaml
 k8s/service.yaml
 ```
 
-### deployment.yaml
+支持：
 
-`deployment.yaml` 描述了应用如何在 Kubernetes 中运行，当前包含：
+- Deployment
 
-* Deployment 资源
-* 单副本配置
-* 容器镜像定义
-* 容器端口 `8000`
-* Gemini 环境变量
-* readinessProbe / livenessProbe
-* 健康检查路径 `/health`
+- Service
 
-示例要点：
-
-* `replicas: 1`
-* `containerPort: 8000`
-* `/health` 作为健康检查探针
-
-### service.yaml
-
-`service.yaml` 描述了应用在集群内如何暴露，当前包含：
-
-* Service 资源
-* 端口 `8000`
-* `targetPort: 8000`
-* `NodePort` 暴露方式
-
-### 当前定位
-
-这部分配置主要用于说明项目已经具备从单机 Docker 部署向 Kubernetes 迁移的基础能力。
-当前重点是：
-
-* 镜像、端口、环境变量和健康检查路径已经定型
-* Deployment / Service 的最小配置已形成
-* 后续可进一步扩展为 Secret、ConfigMap、Ingress、HPA 等更正式方案
-
-### 后续可扩展点
-
-* 将 `GEMINI_API_KEY` 改为 Kubernetes Secret
-* 将 Service 从 `NodePort` 升级为 `LoadBalancer` 或 Ingress
-* 接入镜像仓库（Docker Hub / GHCR / ECR）
-* 在本地 Minikube 或 Docker Desktop Kubernetes 中验证运行
-* 迁移到云上托管 Kubernetes（如 EKS）
+- `/health` 作为健康检查入口
 
 ---
 
-## 17. 当前交付状态总结
+## 17. Android 最小客户端
 
-当前项目已完成以下关键交付能力：
+项目已补充最小 Android 客户端，用于验证：
 
-* FastAPI 服务化
-* Gemini / MockPlanner 双路径决策
-* ReAct 风格多步执行链
-* 三工具协同：
+- 移动端可调用云端 Agent 接口
 
-  * 订单修改
-  * 物流查询
-  * 规则知识检索
-* Tool Schema 标准化
-* 轻量 RAG 检索层
-* 上下文压缩
-* Max-Step 与循环检测
-* request_id / trace_id
-* 结构化日志
-* `/health`
-* `/tools`
-* Docker 本地真跑
-* EC2 云上真部署
-* GitHub Actions 自动部署
-* Android 最小客户端
-* Kubernetes 基础 yaml 配置
+- 服务端返回结果可在客户端展示
+
+- `steps` 执行链路不是黑盒
+
+当前客户端能力包括：
+
+- 输入任务
+
+- 调用 `/run_task`
+
+- 展示 `final_answer`
+
+- 展示 `steps`
 
 ---
 
-## 18. Gemini 降级机制说明
+## 18. 当前仍可继续补强的方向
 
-当前系统已经支持 Gemini 路径接入，并在运行时通过环境变量读取：
+当前版本已满足本地演示、服务部署、接口测试和多步任务验证需求。如果继续往更正式的企业应用推进，下一步可以补这些：
 
-* `GEMINI_API_KEY`
-* `GEMINI_MODEL`
+### 18.1 更正式的监控
 
-在实际部署中，如果 Gemini API 调用失败、权限不足或返回异常，系统会自动降级到本地 `MockPlanner`，以保证主流程不中断。
+- Prometheus 指标导出
 
-这意味着：
+- Grafana 可视化看板
 
-* Agent 具备基础的服务降级能力
-* 即使外部 LLM 服务异常，系统仍可继续完成最小任务流程
-* 对演示、测试和容错都有帮助
+- 更细粒度的 tool latency 分析
 
-当前云上环境中，Gemini 路径已经接通，但由于上游权限限制，调用会触发 `403 PERMISSION_DENIED`，系统随后自动回退到 MockPlanner，保证服务仍然可用。
+### 18.2 更强的 RAG
+
+- rerank
+
+- metadata filtering
+
+- 权限型检索
+
+- 文档版本控制
+
+### 18.3 更强的规则引擎
+
+- 报销审核规则配置化
+
+- 异常策略配置化
+
+- 审核规则热更新
+
+### 18.4 更真实的数据接入
+
+- 从数据库 / API 拉取真实业务数据
+
+- 替代当前模拟 CSV 数据
+
+### 18.5 更完整前端
+
+- Web 管理页
+
+- 看板页面
+
+- 历史任务记录
+
+- 报表导出
 
 ---
 
 ## 19. License
 
-仅用于学习、实验和面试演示。
-
+仅用于学习、实验、演示与面试展示。

@@ -12,6 +12,16 @@ class BaseTool(ABC):
     - input_schema
     - output_schema
     - examples
+
+    Unified return format:
+    {
+        "success": True/False,
+        "data": {...},
+        "error": "...",
+        "suggestion": "...",
+        "tool_name": "query_sales_insight",
+        "summary": "human readable summary"
+    }
     """
 
     name: str = ""
@@ -22,16 +32,6 @@ class BaseTool(ABC):
 
     @abstractmethod
     def run(self, **kwargs) -> Dict[str, Any]:
-        """
-        Unified return format:
-        {
-            "success": True/False,
-            "data": {...},
-            "error": "...",
-            "suggestion": "...",
-            "tool_name": "query_logistics"
-        }
-        """
         raise NotImplementedError
 
     def get_definition(self) -> Dict[str, Any]:
@@ -46,20 +46,56 @@ class BaseTool(ABC):
             "examples": self.examples,
         }
 
-    def ok(self, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def ok(
+        self,
+        data: Optional[Dict[str, Any]] = None,
+        summary: Optional[str] = None,
+    ) -> Dict[str, Any]:
         return {
             "success": True,
             "data": data or {},
             "error": None,
             "suggestion": None,
             "tool_name": self.name,
+            "summary": summary,
         }
 
-    def fail(self, error: str, suggestion: Optional[str] = None) -> Dict[str, Any]:
+    def fail(
+        self,
+        error: str,
+        suggestion: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         return {
             "success": False,
-            "data": None,
+            "data": data,
             "error": error,
             "suggestion": suggestion,
             "tool_name": self.name,
+            "summary": None,
         }
+
+    def require_fields(self, payload: Dict[str, Any], required_fields: List[str]) -> Optional[Dict[str, Any]]:
+        missing = [field for field in required_fields if payload.get(field) in (None, "", [], {})]
+        if missing:
+            return self.fail(
+                error=f"Missing required parameters: {', '.join(missing)}",
+                suggestion=f"Please provide the following fields: {', '.join(missing)}",
+            )
+        return None
+
+    def to_float(self, value: Any, default: float = 0.0) -> float:
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def to_int(self, value: Any, default: int = 0) -> int:
+        try:
+            if value is None or value == "":
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default

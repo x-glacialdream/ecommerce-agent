@@ -1,29 +1,45 @@
 from fastapi import FastAPI
+
 from app.schemas import TaskRequest, TaskResponse
-from app.agent.core import EcommerceAgent
+from app.agent.core import BusinessOpsAgent
 from app.services.registry import ToolRegistry
 from app.services.metrics import metrics_collector
 
+APP_TITLE = "Business Ops AI Agent"
+APP_VERSION = "0.2.0"
+APP_DESCRIPTION = (
+    "A multi-tool business operations AI agent for sales analytics, anomaly detection, "
+    "expense audit, and internal knowledge retrieval, with error handling, max-step control, "
+    "loop detection, structured logging, and simple metrics."
+)
+SERVICE_NAME = "business-ops-ai-agent"
+
 app = FastAPI(
-    title="Minimal E-commerce Agent",
-    version="0.1.0",
-    description="A minimal multi-tool e-commerce agent with error handling, max-step control, loop detection, lightweight retrieval, structured logging, and simple metrics."
+    title=APP_TITLE,
+    version=APP_VERSION,
+    description=APP_DESCRIPTION,
 )
 
-agent = EcommerceAgent()
+agent = BusinessOpsAgent()
 registry = ToolRegistry()
 
 
 @app.get("/")
 def root():
     return {
-        "message": "Minimal E-commerce Agent is running.",
+        "message": f"{APP_TITLE} is running.",
         "available_endpoints": [
             "/run_task",
             "/health",
             "/tools",
-            "/metrics"
-        ]
+            "/metrics",
+        ],
+        "capabilities": [
+            "sales_insight",
+            "business_anomaly_detection",
+            "expense_audit",
+            "internal_knowledge_query",
+        ],
     }
 
 
@@ -31,8 +47,8 @@ def root():
 def health():
     return {
         "status": "ok",
-        "service": "minimal-ecommerce-agent",
-        "version": "0.1.0"
+        "service": SERVICE_NAME,
+        "version": APP_VERSION,
     }
 
 
@@ -40,7 +56,7 @@ def health():
 def list_tools():
     return {
         "count": len(registry.list_tools()),
-        "tools": registry.list_tools()
+        "tools": registry.list_tools(),
     }
 
 

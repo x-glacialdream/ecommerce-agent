@@ -5,16 +5,19 @@ from app.services.retriever import SimpleRetriever
 from app.services.llamaindex_retriever import LlamaIndexRetriever
 
 
-class QueryKBTool(BaseTool):
-    name = "query_kb"
-    description = "Query e-commerce policy and FAQ knowledge base by policy-related query."
+class QueryInternalKBTool(BaseTool):
+    name = "query_internal_kb"
+    description = (
+        "Query internal enterprise knowledge base, including policies, SOPs, reimbursement rules, "
+        "sales handling guidelines, procurement processes, training materials, and product documents."
+    )
 
     input_schema = {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Policy or FAQ query, such as 发货后修改地址 or 退款规则"
+                "description": "Knowledge query, such as 差旅报销制度, 区域销量异常处理规范, 招采流程说明"
             },
             "top_k": {
                 "type": "integer",
@@ -27,6 +30,7 @@ class QueryKBTool(BaseTool):
     output_schema = {
         "type": "object",
         "properties": {
+            "summary": {"type": "string"},
             "query": {"type": "string"},
             "query_tokens": {"type": "array"},
             "top_k": {"type": "integer"},
@@ -36,12 +40,20 @@ class QueryKBTool(BaseTool):
 
     examples = [
         {
-            "input": {"query": "发货后修改地址", "top_k": 3},
-            "description": "Retrieve policy documents about modifying address after shipment"
+            "input": {"query": "差旅报销制度", "top_k": 3},
+            "description": "Retrieve reimbursement policy documents"
         },
         {
-            "input": {"query": "退款规则", "top_k": 2},
-            "description": "Retrieve refund-related documents"
+            "input": {"query": "区域销量异常处理规范", "top_k": 3},
+            "description": "Retrieve anomaly handling guidelines for business operations"
+        },
+        {
+            "input": {"query": "重点客户回访规则", "top_k": 2},
+            "description": "Retrieve customer follow-up rules"
+        },
+        {
+            "input": {"query": "招采流程说明", "top_k": 2},
+            "description": "Retrieve procurement process documents"
         }
     ]
 
@@ -56,7 +68,7 @@ class QueryKBTool(BaseTool):
         if not query:
             return self.fail(
                 error="Missing required parameter: query",
-                suggestion="Please provide a knowledge base query"
+                suggestion="Please provide a valid internal knowledge base query"
             )
 
         try:
@@ -66,23 +78,33 @@ class QueryKBTool(BaseTool):
 
         top_k = max(1, min(top_k, 5))
 
-        # 先走 LlamaIndex embedding RAG
+        # First try LlamaIndex embedding retrieval
         try:
             retrieved = self.llama_retriever.search(query=query, top_k=top_k)
 
             if not retrieved["success"]:
                 raise RuntimeError(retrieved.get("error", "Unknown LlamaIndex retrieval error"))
 
+            results = retrieved.get("results", [])
+            if results:
+                first = results[0]
+                title = first.get("title", "知识库结果")
+                content = first.get("content", "未检索到明确内容。")
+                summary = f"已完成内部知识库检索。当前最相关结果为《{title}》：{content}"
+            else:
+                summary = "已完成内部知识库检索，但未返回有效结果。"
+
             return self.ok(
                 data={
                     "query": retrieved["query"],
                     "query_tokens": retrieved["query_tokens"],
                     "top_k": retrieved["top_k"],
-                    "results": retrieved["results"]
-                }
+                    "results": results,
+                },
+                summary=summary,
             )
 
-        # 如果 LlamaIndex 失败，再降级到旧版关键词检索
+        # Fallback to legacy keyword retriever if LlamaIndex fails
         except Exception as llama_error:
             try:
                 retrieved = self.legacy_retriever.search(query=query, top_k=top_k)
@@ -90,16 +112,26 @@ class QueryKBTool(BaseTool):
                 if not retrieved["success"]:
                     return self.fail(
                         error=retrieved["error"],
-                        suggestion="Try using a more specific policy-related query"
+                        suggestion="Try using a more specific policy, SOP, or process-related query"
                     )
+
+                results = retrieved.get("results", [])
+                if results:
+                    first = results[0]
+                    title = first.get("title", "知识库结果")
+                    content = first.get("content", "未检索到明确内容。")
+                    summary = f"已完成内部知识库检索。当前最相关结果为《{title}》：{content}"
+                else:
+                    summary = "已完成内部知识库检索，但未返回有效结果。"
 
                 result = self.ok(
                     data={
                         "query": retrieved["query"],
                         "query_tokens": retrieved["query_tokens"],
                         "top_k": retrieved["top_k"],
-                        "results": retrieved["results"]
-                    }
+                        "results": results,
+                    },
+                    summary=summary,
                 )
                 result["suggestion"] = (
                     f"LlamaIndex retrieval failed, fallback to legacy retriever: {str(llama_error)}"

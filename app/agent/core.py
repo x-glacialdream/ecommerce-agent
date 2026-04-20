@@ -12,13 +12,13 @@ from app.schemas import StepTrace, TaskResponse
 from app.utils.logger import get_logger, log_event
 
 
-class EcommerceAgent:
+class BusinessOpsAgent:
     def __init__(self) -> None:
         self.registry = ToolRegistry()
         self.planner = LLMPlanner()
-        self.safety = SafetyManager(max_steps=5, repeat_threshold=2)
-        self.compressor = ContextCompressor(keep_last_n=3, max_summary_items=8)
-        self.logger = get_logger("ecommerce_agent")
+        self.safety = SafetyManager(max_steps=6, repeat_threshold=2)
+        self.compressor = ContextCompressor(keep_last_n=4, max_summary_items=10)
+        self.logger = get_logger("business_ops_agent")
 
     def _new_request_id(self) -> str:
         return f"req_{uuid.uuid4().hex[:12]}"
@@ -31,6 +31,31 @@ class EcommerceAgent:
         for step in steps:
             counts[step.action] = counts.get(step.action, 0) + 1
         return counts
+
+    def _build_final_answer(
+        self,
+        user_input: str,
+        steps: List[StepTrace],
+        last_observation: Dict[str, Any] | None,
+    ) -> str:
+        if not steps:
+            return "未执行任何有效步骤。"
+
+        if last_observation and isinstance(last_observation, dict):
+            if isinstance(last_observation.get("summary"), str) and last_observation.get("summary"):
+                return last_observation["summary"]
+
+            if isinstance(last_observation.get("message"), str) and last_observation.get("message"):
+                return last_observation["message"]
+
+            if isinstance(last_observation.get("result_text"), str) and last_observation.get("result_text"):
+                return last_observation["result_text"]
+
+        executed_actions = [step.action for step in steps]
+        return (
+            f"已完成任务处理。用户请求：{user_input}。"
+            f"本次共执行 {len(steps)} 步，涉及工具：{', '.join(executed_actions)}。"
+        )
 
     def _finalize_response(
         self,
@@ -62,6 +87,7 @@ class EcommerceAgent:
             request_id=request_id,
             user_input=user_input,
             max_steps=self.safety.max_steps,
+            agent_type="business_ops",
         )
 
         for step_idx in range(1, self.safety.max_steps + 1):
@@ -107,24 +133,35 @@ class EcommerceAgent:
             )
 
             if action == "finish":
-                final_answer = action_input.get("final_answer", "任务已结束。")
+                final_answer = action_input.get("final_answer")
+                if not final_answer:
+                    final_answer = self._build_final_answer(
+                        user_input=user_input,
+                        steps=steps,
+                        last_observation=last_observation,
+                    )
+
                 total_latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+                final_status = "success"
+                if last_observation is not None and not last_observation.get("success", True):
+                    final_status = "failed"
 
                 log_event(
                     self.logger,
-                    "info",
+                    "info" if final_status == "success" else "warning",
                     "agent_request_finished",
                     request_id=request_id,
                     trace_id=trace_id,
                     step=step_idx,
                     stop_reason=f"planner_finish:{decision_type}",
-                    status="success",
+                    status=final_status,
                     total_latency_ms=total_latency_ms,
                     final_answer=final_answer,
                 )
 
                 response = TaskResponse(
-                    status="success",
+                    status=final_status,
                     final_answer=final_answer,
                     steps=steps,
                     stop_reason=f"planner_finish:{decision_type}",

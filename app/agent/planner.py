@@ -1,12 +1,12 @@
 import json
 import os
-import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 try:
     from google import genai
+
     HAS_GEMINI = True
 except Exception:
     HAS_GEMINI = False
@@ -18,32 +18,200 @@ class PlannerDecision(BaseModel):
         description="One of: call_tool, retry, switch_tool, finish"
     )
     action: str = Field(
-        description="One of: query_logistics, modify_order, query_kb, finish"
+        description="One of: query_sales_insight, detect_business_anomaly, audit_expense, query_internal_kb, finish"
     )
     action_input: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Arguments for the selected action."
+        description="Arguments for the selected action.",
     )
     reason: str = Field(description="Why this decision was made.")
 
 
 class MockPlanner:
     """
-    Rule-based fallback planner.
+    Rule-based fallback planner for business operations scenarios.
     """
 
-    ORDER_ID_PATTERN = re.compile(r"(1001|1002|1003)")
+    def extract_time_range(self, text: str) -> str:
+        if "最近7天" in text or "近7天" in text or "过去7天" in text:
+            return "last_7_days"
+        if "最近30天" in text or "近30天" in text or "过去30天" in text:
+            return "last_30_days"
+        return "last_30_days"
 
-    def extract_order_id(self, text: str) -> Optional[str]:
-        match = self.ORDER_ID_PATTERN.search(text)
-        return match.group(1) if match else None
+    def extract_group_by(self, text: str) -> str:
+        if "区域产品线" in text or "区域-产品线" in text or "组合" in text:
+            return "region_product_line"
+        if "区域" in text or "大区" in text:
+            return "region"
+        if "产品线" in text or "品类" in text:
+            return "product_line"
+        return "region"
 
-    def extract_address(self, text: str) -> Optional[str]:
-        markers = ["改成", "修改为", "地址改为", "new address is"]
-        for marker in markers:
-            if marker in text:
-                return text.split(marker, 1)[1].strip(" ：:，,。.")
-        return None
+    def extract_metric(self, text: str) -> str:
+        if "销量" in text or "数量" in text or "件数" in text:
+            return "quantity"
+        return "sales_amount"
+
+    def extract_kb_query(self, text: str) -> str:
+        kb_map = [
+            ("报销", "差旅报销制度"),
+            ("发票", "发票提交要求"),
+            ("对账", "财务对账异常处理SOP"),
+            ("招采", "招采流程说明"),
+            ("采购", "招采流程说明"),
+            ("入职", "新员工入职流程"),
+            ("培训", "培训制度"),
+            ("区域销量异常", "区域销量异常处理规范"),
+            ("销量异常", "区域销量异常处理规范"),
+            ("异常处理", "区域销量异常处理规范"),
+            ("产品线异常", "产品线异常波动排查指引"),
+            ("波动排查", "产品线异常波动排查指引"),
+            ("回访", "重点客户回访规则"),
+            ("产品资料", "产品资料查询说明"),
+            ("制度", "制度规范"),
+            ("流程", "流程规范"),
+            ("SOP", "流程规范"),
+            ("政策", "业务政策"),
+        ]
+        for keyword, mapped in kb_map:
+            if keyword in text:
+                return mapped
+        return text.strip() if text.strip() else "制度规范"
+
+    def build_sales_args(self, text: str) -> Dict[str, Any]:
+        return {
+            "metric": self.extract_metric(text),
+            "group_by": self.extract_group_by(text),
+            "time_range": self.extract_time_range(text),
+            "dimension_filter": {},
+        }
+
+    def build_anomaly_args(self, text: str) -> Dict[str, Any]:
+        # 异常任务默认更敏感：
+        # 1. 默认最近 7 天
+        # 2. 默认按区域-产品线组合看，避免异常被摊平
+        # 3. 默认阈值 20%
+        explicit_time = self.extract_time_range(text)
+        has_explicit_time = any(
+            kw in text for kw in ["最近7天", "近7天", "过去7天", "最近30天", "近30天", "过去30天"]
+        )
+        has_explicit_group = any(
+            kw in text for kw in ["区域", "大区", "产品线", "品类", "区域产品线", "区域-产品线", "组合"]
+        )
+
+        time_range = explicit_time if has_explicit_time else "last_7_days"
+        group_by = self.extract_group_by(text) if has_explicit_group else "region_product_line"
+
+        return {
+            "metric": self.extract_metric(text),
+            "group_by": group_by,
+            "time_range": time_range,
+            "threshold": 0.2,
+        }
+
+    def build_expense_args(self, text: str) -> Dict[str, Any]:
+        return {
+            "top_k": 10,
+        }
+
+    def build_kb_args(self, text: str) -> Dict[str, Any]:
+        return {
+            "query": self.extract_kb_query(text),
+            "top_k": 3,
+        }
+
+    def _format_kb_finish(self, observation: Dict[str, Any]) -> str:
+        data = observation.get("data", {}) if isinstance(observation, dict) else {}
+        results = data.get("results", []) if isinstance(data, dict) else []
+        if results:
+            first = results[0]
+            title = first.get("title", "知识库结果")
+            content = first.get("content", "未检索到明确内容。")
+            return f"根据知识库《{title}》：{content}"
+        return "已完成知识库查询，但未检索到明确结果。"
+
+    def _format_sales_finish(self, observation: Dict[str, Any]) -> str:
+        if not isinstance(observation, dict):
+            return "已完成销售分析。"
+
+        summary = observation.get("summary")
+        if isinstance(summary, str) and summary:
+            return summary
+
+        data = observation.get("data", {})
+        if isinstance(data, dict):
+            tool_summary = data.get("summary")
+            if isinstance(tool_summary, str) and tool_summary:
+                return tool_summary
+
+        return "已完成销售分析。"
+
+    def _format_anomaly_finish(self, observation: Dict[str, Any]) -> str:
+        if not isinstance(observation, dict):
+            return "已完成异常检测。"
+
+        summary = observation.get("summary")
+        if isinstance(summary, str) and summary:
+            return summary
+
+        data = observation.get("data", {})
+        if isinstance(data, dict):
+            tool_summary = data.get("summary")
+            if isinstance(tool_summary, str) and tool_summary:
+                return tool_summary
+
+            anomalies = data.get("anomalies", [])
+            if anomalies:
+                first = anomalies[0]
+                group = first.get("group", "未知对象")
+                severity = first.get("severity", "unknown")
+                deviation = first.get("deviation_ratio", "N/A")
+                suggested_action = first.get("suggested_action")
+                base_text = f"检测到异常，重点关注对象：{group}，严重程度：{severity}，偏离比例：{deviation}。"
+                if suggested_action:
+                    return f"{base_text} {suggested_action}"
+                return base_text
+
+        return "已完成异常检测，未发现需要特别提示的异常。"
+
+    def _format_expense_finish(self, observation: Dict[str, Any]) -> str:
+        if not isinstance(observation, dict):
+            return "已完成报销审核。"
+
+        summary = observation.get("summary")
+        if isinstance(summary, str) and summary:
+            return summary
+
+        data = observation.get("data", {})
+        if isinstance(data, dict):
+            tool_summary = data.get("summary")
+            if isinstance(tool_summary, str) and tool_summary:
+                return tool_summary
+
+            flagged_items = data.get("flagged_items", [])
+            if flagged_items:
+                return f"已完成报销审核，识别到 {len(flagged_items)} 条需复核记录。"
+
+        return "已完成报销审核，未发现明显异常。"
+
+    def _pick_anomaly_kb_query(self, text: str, steps: List[Dict[str, Any]]) -> str:
+        if "区域" in text or "大区" in text:
+            return "区域销量异常处理规范"
+        if "产品线" in text or "品类" in text:
+            return "产品线异常波动排查指引"
+
+        for s in steps:
+            if s.get("action") == "detect_business_anomaly":
+                obs = s.get("observation", {}) or {}
+                data = obs.get("data", {}) or {}
+                group_by = data.get("group_by")
+                if group_by == "region":
+                    return "区域销量异常处理规范"
+                if group_by == "product_line":
+                    return "产品线异常波动排查指引"
+
+        return "区域销量异常处理规范"
 
     def decide(
         self,
@@ -53,97 +221,159 @@ class MockPlanner:
         last_observation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         text = user_input.strip()
-        order_id = self.extract_order_id(text)
 
-        # 复合任务：先查物流，再查规则
-        if "物流" in text and ("还能不能改地址" in text or "是否还能改地址" in text):
+        # 复合任务 1：先做异常检测，再查制度
+        if (
+            ("异常" in text or "下滑" in text or "预警" in text or "波动" in text)
+            and ("制度" in text or "规则" in text or "流程" in text or "建议" in text)
+        ):
             if not steps:
                 return {
-                    "thought": "这是一个复合任务，先查物流状态。",
+                    "thought": "这是一个复合任务，先识别业务异常。",
                     "decision_type": "call_tool",
-                    "action": "query_logistics",
-                    "action_input": {"order_id": order_id},
-                    "reason": "先确认订单物流/发货状态，再判断是否需要查询规则。"
+                    "action": "detect_business_anomaly",
+                    "action_input": self.build_anomaly_args(text),
+                    "reason": "先判断是否存在异常，再结合制度给出处理建议。",
                 }
 
             last_action = steps[-1]["action"]
             last_obs = steps[-1]["observation"]
 
-            if last_action == "query_logistics" and last_obs.get("success"):
+            if last_action == "detect_business_anomaly" and last_obs.get("success"):
+                kb_query = self._pick_anomaly_kb_query(text, steps)
                 return {
-                    "thought": "物流信息已拿到，继续查询发货后修改地址规则。",
+                    "thought": "异常检测结果已拿到，继续查询相关制度与处理规范。",
                     "decision_type": "switch_tool",
-                    "action": "query_kb",
-                    "action_input": {"query": "发货后修改地址", "top_k": 3},
-                    "reason": "复合任务第二阶段：给出规则解释。"
+                    "action": "query_internal_kb",
+                    "action_input": {"query": kb_query, "top_k": 3},
+                    "reason": "复合任务第二阶段：补充制度依据和处理建议。",
                 }
 
-            if last_action == "query_kb" and last_obs.get("success"):
-                logistics_data = None
+            if last_action == "query_internal_kb" and last_obs.get("success"):
+                anomaly_answer = None
                 for s in steps:
-                    if s["action"] == "query_logistics" and s["observation"].get("success"):
-                        logistics_data = s["observation"]["data"]
+                    if s["action"] == "detect_business_anomaly" and s["observation"].get("success"):
+                        anomaly_answer = self._format_anomaly_finish(s["observation"])
                         break
 
-                kb_data = last_obs["data"]
-                kb_results = kb_data.get("results", [])
-                kb_answer = kb_results[0]["content"] if kb_results else "未检索到明确规则。"
+                kb_answer = self._format_kb_finish(last_obs)
 
-                if logistics_data:
-                    final_answer = (
-                        f"订单 {logistics_data['order_id']} 的物流状态是：{logistics_data['status']}，"
-                        f"运单号：{logistics_data['tracking_no']}。另外，根据知识库规则：{kb_answer}"
-                    )
-                else:
-                    final_answer = f"根据知识库规则：{kb_answer}"
+                final_answer = (
+                    f"{anomaly_answer or '已完成异常检测。'} "
+                    f"{kb_answer}"
+                )
 
                 return {
-                    "thought": "复合任务信息已经收集完成，可以结束。",
+                    "thought": "异常结果和制度依据都已齐备，可以结束。",
                     "decision_type": "finish",
                     "action": "finish",
                     "action_input": {"final_answer": final_answer},
-                    "reason": "物流结果和规则解释都已齐备。"
+                    "reason": "复合任务已完成。",
+                }
+
+        # 复合任务 2：先做报销审核，再查制度
+        if (
+            ("报销" in text or "发票" in text or "对账" in text or "审核" in text)
+            and ("制度" in text or "规则" in text or "流程" in text or "说明" in text)
+        ):
+            if not steps:
+                return {
+                    "thought": "这是一个复合任务，先进行报销审核。",
+                    "decision_type": "call_tool",
+                    "action": "audit_expense",
+                    "action_input": self.build_expense_args(text),
+                    "reason": "先识别异常单据，再结合制度生成处理意见。",
+                }
+
+            last_action = steps[-1]["action"]
+            last_obs = steps[-1]["observation"]
+
+            if last_action == "audit_expense" and last_obs.get("success"):
+                return {
+                    "thought": "报销审核结果已拿到，继续查询报销制度。",
+                    "decision_type": "switch_tool",
+                    "action": "query_internal_kb",
+                    "action_input": {"query": "差旅报销制度", "top_k": 3},
+                    "reason": "复合任务第二阶段：补充制度依据。",
+                }
+
+            if last_action == "query_internal_kb" and last_obs.get("success"):
+                expense_answer = None
+                for s in steps:
+                    if s["action"] == "audit_expense" and s["observation"].get("success"):
+                        expense_answer = self._format_expense_finish(s["observation"])
+                        break
+
+                kb_answer = self._format_kb_finish(last_obs)
+
+                final_answer = (
+                    f"{expense_answer or '已完成报销审核。'} "
+                    f"{kb_answer}"
+                )
+
+                return {
+                    "thought": "报销审核结果和制度依据都已齐备，可以结束。",
+                    "decision_type": "finish",
+                    "action": "finish",
+                    "action_input": {"final_answer": final_answer},
+                    "reason": "复合任务已完成。",
                 }
 
         # 工具失败后的闭环控制
         if last_observation and not last_observation.get("success", False):
             error_text = last_observation.get("error", "")
 
-            if "cannot be modified" in error_text:
-                return {
-                    "thought": "订单无法直接修改，改为查询知识库规则。",
-                    "decision_type": "switch_tool",
-                    "action": "query_kb",
-                    "action_input": {"query": "发货后修改地址", "top_k": 3},
-                    "reason": "订单修改失败后切换到知识库解释。"
-                }
+            if steps:
+                last_action = steps[-1]["action"]
 
-            if "Missing required parameter" in error_text or "Missing required parameters" in error_text:
-                return {
-                    "thought": "缺少必要参数，终止并提示用户补充信息。",
-                    "decision_type": "finish",
-                    "action": "finish",
-                    "action_input": {
-                        "final_answer": f"任务执行失败：{error_text}。请补充完整订单号或地址信息。"
-                    },
-                    "reason": "当前无法自动修复缺失参数。"
-                }
+                if last_action == "audit_expense":
+                    return {
+                        "thought": "报销审核失败，改为查询相关制度并给出人工处理建议。",
+                        "decision_type": "switch_tool",
+                        "action": "query_internal_kb",
+                        "action_input": {"query": "差旅报销制度", "top_k": 3},
+                        "reason": "工具失败后切换到知识库解释路径。",
+                    }
 
-            if "not found in logistics system" in error_text:
-                return {
-                    "thought": "物流系统未查到结果，切换到知识库给出物流异常处理建议。",
-                    "decision_type": "switch_tool",
-                    "action": "query_kb",
-                    "action_input": {"query": "物流异常", "top_k": 3},
-                    "reason": "查询失败后转规则说明。"
-                }
+                if last_action == "detect_business_anomaly":
+                    return {
+                        "thought": "异常检测失败，终止并提示用户检查输入范围。",
+                        "decision_type": "finish",
+                        "action": "finish",
+                        "action_input": {
+                            "final_answer": f"异常检测执行失败：{error_text}。请检查查询时间范围、分组维度或数据文件。"
+                        },
+                        "reason": "当前无法自动修复。",
+                    }
+
+                if last_action == "query_sales_insight":
+                    return {
+                        "thought": "销售分析失败，终止并提示用户检查分析条件。",
+                        "decision_type": "finish",
+                        "action": "finish",
+                        "action_input": {
+                            "final_answer": f"销售分析执行失败：{error_text}。请检查时间范围、指标或分组条件。"
+                        },
+                        "reason": "当前无法自动修复。",
+                    }
+
+                if last_action == "query_internal_kb":
+                    return {
+                        "thought": "知识库查询失败，结束并向用户说明错误。",
+                        "decision_type": "finish",
+                        "action": "finish",
+                        "action_input": {
+                            "final_answer": f"知识库查询失败：{error_text}"
+                        },
+                        "reason": "未命中恢复策略。",
+                    }
 
             return {
                 "thought": "当前工具执行失败，结束并向用户说明错误。",
                 "decision_type": "finish",
                 "action": "finish",
                 "action_input": {"final_answer": f"任务执行失败：{error_text}"},
-                "reason": "未命中恢复策略。"
+                "reason": "未命中恢复策略。",
             }
 
         # 成功后的收尾逻辑
@@ -151,99 +381,117 @@ class MockPlanner:
             last_action = steps[-1]["action"]
             last_obs = steps[-1]["observation"]
 
-            if last_action == "query_kb" and last_obs.get("success"):
-                kb_data = last_obs["data"]
-                kb_results = kb_data.get("results", [])
-                kb_answer = kb_results[0]["content"] if kb_results else "未检索到明确规则。"
+            if last_action == "query_internal_kb" and last_obs.get("success"):
                 return {
                     "thought": "知识库结果已拿到，可以直接回复用户。",
                     "decision_type": "finish",
                     "action": "finish",
                     "action_input": {
-                        "final_answer": f"根据知识库规则：{kb_answer}"
+                        "final_answer": self._format_kb_finish(last_obs)
                     },
-                    "reason": "知识查询任务已完成。"
+                    "reason": "知识查询任务已完成。",
                 }
 
-            if last_action == "query_logistics" and last_obs.get("success"):
-                data = last_obs["data"]
+            if last_action == "query_sales_insight" and last_obs.get("success"):
                 return {
-                    "thought": "已经拿到物流信息，可以结束。",
+                    "thought": "销售分析结果已拿到，可以结束。",
                     "decision_type": "finish",
                     "action": "finish",
                     "action_input": {
-                        "final_answer": f"订单 {data['order_id']} 的物流状态是：{data['status']}，运单号：{data['tracking_no']}"
+                        "final_answer": self._format_sales_finish(last_obs)
                     },
-                    "reason": "物流查询任务已完成。"
+                    "reason": "销售分析任务已完成。",
                 }
 
-            if last_action == "modify_order" and last_obs.get("success"):
-                data = last_obs["data"]
+            if last_action == "detect_business_anomaly" and last_obs.get("success"):
                 return {
-                    "thought": "订单地址修改成功，可以结束。",
+                    "thought": "异常检测结果已拿到，可以结束。",
                     "decision_type": "finish",
                     "action": "finish",
                     "action_input": {
-                        "final_answer": f"订单 {data['order_id']} 地址修改成功，新地址为：{data['new_address']}"
+                        "final_answer": self._format_anomaly_finish(last_obs)
                     },
-                    "reason": "订单修改任务已完成。"
+                    "reason": "异常检测任务已完成。",
                 }
 
-        # 首轮路由
-        if "物流" in text or "快递" in text:
+            if last_action == "audit_expense" and last_obs.get("success"):
+                return {
+                    "thought": "报销审核结果已拿到，可以结束。",
+                    "decision_type": "finish",
+                    "action": "finish",
+                    "action_input": {
+                        "final_answer": self._format_expense_finish(last_obs)
+                    },
+                    "reason": "报销审核任务已完成。",
+                }
+
+        # 首轮路由：报销 / 发票 / 对账优先
+        if "报销" in text or "发票" in text or "对账" in text or "审核" in text:
             return {
-                "thought": "用户在查询物流信息，应调用物流工具。",
+                "thought": "用户在咨询报销审核或对账问题，应调用报销审核工具。",
                 "decision_type": "call_tool",
-                "action": "query_logistics",
-                "action_input": {"order_id": order_id},
-                "reason": "识别到物流查询意图。"
+                "action": "audit_expense",
+                "action_input": self.build_expense_args(text),
+                "reason": "识别到财务审核类意图。",
             }
 
-        if "修改地址" in text or "改地址" in text or "收货地址" in text:
-            new_address = self.extract_address(text)
+        # 首轮路由：异常检测
+        if "异常" in text or "预警" in text or "下滑" in text or "波动" in text or "流失" in text:
             return {
-                "thought": "用户想修改订单地址，应调用订单修改工具。",
+                "thought": "用户在关注业务异常，应调用异常检测工具。",
                 "decision_type": "call_tool",
-                "action": "modify_order",
-                "action_input": {"order_id": order_id, "new_address": new_address},
-                "reason": "识别到订单修改意图。"
+                "action": "detect_business_anomaly",
+                "action_input": self.build_anomaly_args(text),
+                "reason": "识别到业务异常检测意图。",
             }
 
-        if "退款" in text:
+        # 首轮路由：知识查询
+        if (
+            "制度" in text
+            or "规则" in text
+            or "流程" in text
+            or "SOP" in text
+            or "政策" in text
+            or "规范" in text
+            or "怎么办" in text
+        ):
             return {
-                "thought": "用户在咨询退款政策，应查询知识库。",
+                "thought": "用户在咨询制度或流程，应查询内部知识库。",
                 "decision_type": "call_tool",
-                "action": "query_kb",
-                "action_input": {"query": "退款规则", "top_k": 3},
-                "reason": "识别到退款规则咨询。"
+                "action": "query_internal_kb",
+                "action_input": self.build_kb_args(text),
+                "reason": "识别到制度/流程问答意图。",
             }
 
-        if "发货后" in text and "改地址" in text:
+        # 首轮路由：销售分析
+        if (
+            "销量" in text
+            or "销售" in text
+            or "产品线" in text
+            or "区域表现" in text
+            or "大区表现" in text
+            or "趋势" in text
+            or "分析" in text
+        ):
             return {
-                "thought": "用户在咨询发货后修改地址政策，应查询知识库。",
+                "thought": "用户在咨询经营分析问题，应调用销售分析工具。",
                 "decision_type": "call_tool",
-                "action": "query_kb",
-                "action_input": {"query": "发货后修改地址", "top_k": 3},
-                "reason": "识别到规则咨询。"
-            }
-
-        if "物流异常" in text or "物流没更新" in text:
-            return {
-                "thought": "用户在咨询物流异常处理，应查询知识库。",
-                "decision_type": "call_tool",
-                "action": "query_kb",
-                "action_input": {"query": "物流异常", "top_k": 3},
-                "reason": "识别到物流异常规则咨询。"
+                "action": "query_sales_insight",
+                "action_input": self.build_sales_args(text),
+                "reason": "识别到销售分析意图。",
             }
 
         return {
-            "thought": "无法明确识别用户意图，直接结束并提示用户更具体描述。",
+            "thought": "无法明确识别用户意图，结束并提示用户更具体描述。",
             "decision_type": "finish",
             "action": "finish",
             "action_input": {
-                "final_answer": "暂时无法准确识别你的需求，请提供订单号，并明确是查物流、改地址，还是咨询规则。"
+                "final_answer": (
+                    "暂时无法准确识别你的需求。请明确说明是要做销售分析、异常预警、报销审核，"
+                    "还是查询内部制度/流程。"
+                )
             },
-            "reason": "意图不明确。"
+            "reason": "意图不明确。",
         }
 
 
@@ -310,22 +558,25 @@ class LLMPlanner:
         context_text = self._build_context_text(steps, context_payload)
 
         return f"""
-你是一个电商智能助理 Agent 的决策层，只能输出一个 JSON 对象，不要输出任何额外文字。
+你是一个企业内部数智化 AI Agent 的决策层，只能输出一个 JSON 对象，不要输出任何额外文字。
 
 可用工具：
-1. query_logistics(order_id): 查询订单物流
-2. modify_order(order_id, new_address): 修改订单地址
-3. query_kb(query, top_k): 查询电商规则知识库
-4. finish(final_answer): 结束任务并回复用户
+1. query_sales_insight(metric, group_by, time_range, dimension_filter): 查询销售分析结果
+2. detect_business_anomaly(metric, group_by, time_range, threshold): 检测业务异常
+3. audit_expense(top_k): 审核报销/对账异常
+4. query_internal_kb(query, top_k): 查询内部制度、流程、政策和知识库
+5. finish(final_answer): 结束任务并回复用户
 
 决策要求：
 - 根据用户任务、历史步骤和最近一次 observation，决定下一步。
 - decision_type 只能是：call_tool, retry, switch_tool, finish
-- action 只能是：query_logistics, modify_order, query_kb, finish
+- action 只能是：query_sales_insight, detect_business_anomaly, audit_expense, query_internal_kb, finish
 - 如果工具失败，需要判断是 retry / switch_tool / finish
 - 如果用户任务是复合任务，可以执行多步
+- 先做数据/异常识别，再做制度解释
+- 异常任务默认可以更敏感，优先考虑较短窗口和更细粒度分析
 - 优先保持简洁、可执行、参数完整
-- 不要编造订单号或地址
+- 不要编造不存在的数据内容
 
 用户输入：
 {user_input}
@@ -342,7 +593,13 @@ thought, decision_type, action, action_input, reason
 
     def _normalize_decision(self, data: Dict[str, Any]) -> Dict[str, Any]:
         allowed_decisions = {"call_tool", "retry", "switch_tool", "finish"}
-        allowed_actions = {"query_logistics", "modify_order", "query_kb", "finish"}
+        allowed_actions = {
+            "query_sales_insight",
+            "detect_business_anomaly",
+            "audit_expense",
+            "query_internal_kb",
+            "finish",
+        }
 
         decision_type = data.get("decision_type", "finish")
         action = data.get("action", "finish")
@@ -361,7 +618,7 @@ thought, decision_type, action, action_input, reason
             "decision_type": decision_type,
             "action": action,
             "action_input": action_input,
-            "reason": str(data.get("reason", "默认原因"))
+            "reason": str(data.get("reason", "默认原因")),
         }
 
     def decide(

@@ -1,17 +1,19 @@
 from typing import Dict, List
 
+from app.tools.anomaly import DetectBusinessAnomalyTool
 from app.tools.base import BaseTool
-from app.tools.kb import QueryKBTool
-from app.tools.logistics import QueryLogisticsTool
-from app.tools.order import ModifyOrderTool
+from app.tools.expense_audit import ExpenseAuditTool
+from app.tools.kb import QueryInternalKBTool
+from app.tools.sales_insight import SalesInsightTool
 
 
 class ToolRegistry:
     def __init__(self) -> None:
         self.tools: Dict[str, BaseTool] = {}
-        self.register(QueryLogisticsTool())
-        self.register(ModifyOrderTool())
-        self.register(QueryKBTool())
+        self.register(SalesInsightTool())
+        self.register(DetectBusinessAnomalyTool())
+        self.register(ExpenseAuditTool())
+        self.register(QueryInternalKBTool())
 
     def register(self, tool: BaseTool) -> None:
         self.tools[tool.name] = tool
